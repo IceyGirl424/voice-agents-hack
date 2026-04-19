@@ -76,12 +76,16 @@ GEMINI_MODEL=gemini-3-flash-preview
 CACTUS_MODEL_PATH=/path/to/cactus/weights/gemma-4-e2b-it
 CACTUS_PYTHON_SRC=/path/to/cactus/python/src
 
+# On-device speech-to-text (mic → Parakeet via POST /api/transcribe)
+PARAKEET_MODEL_PATH=/Users/alinapanther/Documents/cactus/weights/parakeet-tdt-0.6b-v3
+
 # Optional: natural TTS for spoken answers (falls back to browser TTS if unset)
 ELEVEN_API_KEY=your-elevenlabs-key
 ```
 
 - **Gemini key:** [Google AI Studio](https://aistudio.google.com/api-keys)  
 - **Cactus:** `CACTUS_MODEL_PATH` is the directory containing `config.txt` and `*.weights` shards (not a single `.gguf` file).  
+- **Parakeet:** `PARAKEET_MODEL_PATH` points at converted Parakeet TDT weights for local transcription (browser records audio; server runs `cactus_transcribe`). If unset or transcription fails, the UI falls back to the Web Speech API.  
 - **ElevenLabs:** used by `POST /api/speak` for high-quality voice; optional.
 
 ### 4. Start the server

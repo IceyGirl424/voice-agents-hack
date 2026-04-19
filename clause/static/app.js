@@ -10,9 +10,11 @@ const els = {
   fileInput: $("fileInput"),
   docStatus: $("docStatus"),
   docMeta: $("docMeta"),
+  modeSwitch: $("modeSwitch"),
   modePrivate: $("modePrivate"),
   modeCloud: $("modeCloud"),
   modeHint: $("modeHint"),
+  micWrap: $("micWrap"),
   micBtn: $("micBtn"),
   speechStatus: $("speechStatus"),
   chatThread: $("chatThread"),
@@ -55,6 +57,7 @@ function setMode(mode) {
   selectedMode = mode;
   els.modePrivate.classList.toggle("active", mode === "private");
   els.modeCloud.classList.toggle("active", mode === "cloud");
+  if (els.modeSwitch) els.modeSwitch.dataset.active = mode;
   updateModeHint();
 }
 
@@ -377,6 +380,22 @@ els.dropzone.addEventListener("drop", async (e) => {
   }
 });
 
+const hasMediaRecorderApi =
+  typeof MediaRecorder !== "undefined" &&
+  navigator.mediaDevices &&
+  typeof navigator.mediaDevices.getUserMedia === "function";
+
+function pickAudioMimeType() {
+  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+    return "";
+  }
+  for (const type of candidates) {
+    if (MediaRecorder.isTypeSupported(type)) return type;
+  }
+  return "";
+}
+
 /** @type {SpeechRecognition | null} */
 let recognition = null;
 if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
@@ -387,11 +406,23 @@ if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
   recognition.lang = "en-US";
 }
 
-/** Transcript for the current mic session (final segments only). */
+let mediaRecorder = null;
+let recordedChunks = [];
+let recordedMime = "";
+let captureStream = null;
+/** While true, MediaRecorder is the primary capture path (Parakeet on server). */
+let useRecorderPrimary = false;
+
+/** Web Speech transcript (fallback if /api/transcribe fails, or WS-only mode). */
 let pendingTranscript = "";
+
+const voiceInputEnabled = hasMediaRecorderApi || !!recognition;
+
+let micOn = false;
 
 function setListening(on) {
   els.micBtn.classList.toggle("listening", on);
+  if (els.micWrap) els.micWrap.classList.toggle("is-recording", on);
   els.micBtn.setAttribute("aria-pressed", on ? "true" : "false");
   els.micBtn.setAttribute("aria-label", on ? "Stop and send" : "Start speaking");
   els.speechStatus.textContent = on
@@ -400,6 +431,7 @@ function setListening(on) {
 }
 
 function startListeningSession() {
+  if (!recognition) return;
   try {
     recognition.start();
   } catch {
@@ -411,6 +443,99 @@ function startListeningSession() {
       }
     }, 120);
   }
+}
+
+async function startMicCapture() {
+  pendingTranscript = "";
+  recordedChunks = [];
+  recordedMime = "";
+  captureStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const mime = pickAudioMimeType();
+  recordedMime = mime;
+  mediaRecorder = new MediaRecorder(captureStream, mime ? { mimeType: mime } : undefined);
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) recordedChunks.push(e.data);
+  };
+  mediaRecorder.start();
+  useRecorderPrimary = true;
+  if (recognition) {
+    try {
+      recognition.start();
+    } catch {
+      /* parallel browser STT fallback */
+    }
+  }
+}
+
+async function stopMicCaptureAndGetText() {
+  if (recognition) {
+    try {
+      recognition.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+  await new Promise((r) => setTimeout(r, 140));
+
+  if (!useRecorderPrimary || !mediaRecorder) {
+    const t = pendingTranscript.trim();
+    pendingTranscript = "";
+    captureStream?.getTracks().forEach((track) => track.stop());
+    captureStream = null;
+    mediaRecorder = null;
+    useRecorderPrimary = false;
+    return t;
+  }
+
+  return await new Promise((resolve) => {
+    const mr = mediaRecorder;
+    if (!mr || mr.state === "inactive") {
+      captureStream?.getTracks().forEach((track) => track.stop());
+      captureStream = null;
+      mediaRecorder = null;
+      useRecorderPrimary = false;
+      const t = pendingTranscript.trim();
+      pendingTranscript = "";
+      resolve(t);
+      return;
+    }
+    mr.onstop = async () => {
+      captureStream?.getTracks().forEach((track) => track.stop());
+      captureStream = null;
+      mediaRecorder = null;
+      useRecorderPrimary = false;
+      const blob = new Blob(recordedChunks, {
+        type: recordedMime || mr.mimeType || "audio/webm",
+      });
+      recordedChunks = [];
+
+      let text = "";
+      try {
+        const fd = new FormData();
+        fd.append("audio", blob, "clause-input.webm");
+        const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.text && String(data.text).trim()) {
+          text = String(data.text).trim();
+        }
+      } catch {
+        /* Parakeet unreachable */
+      }
+
+      if (!text) {
+        text = pendingTranscript.trim();
+      }
+      pendingTranscript = "";
+      resolve(text);
+    };
+    try {
+      mr.stop();
+    } catch {
+      captureStream?.getTracks().forEach((track) => track.stop());
+      pendingTranscript = "";
+      resolve("");
+    }
+  });
 }
 
 let replyInFlight = false;
@@ -427,7 +552,7 @@ async function sendTurn(question) {
   if (replyInFlight) return;
 
   replyInFlight = true;
-  if (recognition) els.micBtn.disabled = true;
+  if (voiceInputEnabled) els.micBtn.disabled = true;
 
   appendUserBubble(question);
   showTyping();
@@ -449,13 +574,11 @@ async function sendTurn(question) {
     alert(err.message || String(err));
   } finally {
     replyInFlight = false;
-    if (recognition) els.micBtn.disabled = false;
+    if (voiceInputEnabled) els.micBtn.disabled = false;
   }
 }
 
 if (recognition) {
-  let micOn = false;
-
   recognition.onresult = (event) => {
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const chunk = event.results[i][0].transcript;
@@ -476,41 +599,80 @@ if (recognition) {
   };
 
   recognition.onend = () => {
-    if (micOn) {
-      setTimeout(() => {
-        if (micOn) startListeningSession();
-      }, 75);
-    } else {
+    if (!micOn) {
       setListening(false);
+      return;
     }
+    if (useRecorderPrimary && mediaRecorder && mediaRecorder.state === "recording") {
+      setTimeout(() => {
+        if (micOn && mediaRecorder && mediaRecorder.state === "recording") {
+          startListeningSession();
+        }
+      }, 50);
+      return;
+    }
+    setTimeout(() => {
+      if (micOn) startListeningSession();
+    }, 75);
   };
+}
 
-  const toggleMic = () => {
-    if (!recognition) return;
+async function toggleMic() {
+  if (hasMediaRecorderApi) {
     if (!micOn) {
       stopAssistantPlayback();
       pendingTranscript = "";
       micOn = true;
       setListening(true);
-      startListeningSession();
+      try {
+        await startMicCapture();
+      } catch (err) {
+        micOn = false;
+        setListening(false);
+        if (recognition) {
+          pendingTranscript = "";
+          micOn = true;
+          setListening(true);
+          startListeningSession();
+        } else {
+          alert(err?.message || String(err) || "Microphone access failed.");
+        }
+      }
     } else {
       micOn = false;
-      try {
-        recognition.stop();
-      } catch {
-        /* ignore */
-      }
       setListening(false);
-      const q = pendingTranscript.trim();
-      pendingTranscript = "";
+      const q = await stopMicCaptureAndGetText();
       void sendTurn(q);
     }
-  };
+    return;
+  }
 
-  els.micBtn.addEventListener("click", toggleMic);
+  if (!recognition) return;
+  if (!micOn) {
+    stopAssistantPlayback();
+    pendingTranscript = "";
+    micOn = true;
+    setListening(true);
+    startListeningSession();
+  } else {
+    micOn = false;
+    try {
+      recognition.stop();
+    } catch {
+      /* ignore */
+    }
+    setListening(false);
+    const q = pendingTranscript.trim();
+    pendingTranscript = "";
+    void sendTurn(q);
+  }
+}
+
+if (voiceInputEnabled) {
+  els.micBtn.addEventListener("click", () => void toggleMic());
 } else {
   els.micBtn.disabled = true;
-  els.speechStatus.textContent = "Voice input isn’t supported in this browser";
+  els.speechStatus.textContent = "Voice input isn’t available in this browser";
 }
 
 initTheme();

@@ -13,7 +13,12 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <div class="ambient-stack" aria-hidden="true">
+      <div class="ambient-layer ambient-layer--deep"></div>
+      <div class="ambient-layer ambient-layer--mist"></div>
+    </div>
     <div class="bg-grid" aria-hidden="true"></div>
+
     <header class="topbar">
       <div class="brand">
         <span class="logo" aria-hidden="true"></span>
@@ -28,9 +33,7 @@
     </header>
 
     <main class="shell shell--chat">
-      <p class="intro-blurb">
-        Upload your document, then talk it through — follow-ups remember what you asked. Voice only.
-      </p>
+      <h1 class="page-headline">Your lease, finally in plain English.</h1>
 
       <section class="layout layout--setup">
         <div class="panel card panel--compact">
@@ -52,15 +55,18 @@
           <div class="panel-head">
             <h2>Mode</h2>
           </div>
-          <div class="mode-row" role="group" aria-label="Inference mode">
-            <button type="button" class="mode-btn active" data-mode="private" id="modePrivate">
-              <span class="mode-title">Private</span>
-              <span class="mode-sub">On-device</span>
-            </button>
-            <button type="button" class="mode-btn" data-mode="cloud" id="modeCloud">
-              <span class="mode-title">Cloud</span>
-              <span class="mode-sub">Gemini</span>
-            </button>
+          <div class="mode-switch" id="modeSwitch" data-active="private" role="group" aria-label="Inference mode">
+            <div class="mode-switch-track">
+              <span class="mode-switch-highlight" aria-hidden="true"></span>
+              <button type="button" class="mode-switch-btn active" data-mode="private" id="modePrivate">
+                <span class="mode-title">Private</span>
+                <span class="mode-sub">On-device</span>
+              </button>
+              <button type="button" class="mode-switch-btn" data-mode="cloud" id="modeCloud">
+                <span class="mode-title">Cloud</span>
+                <span class="mode-sub">Gemini</span>
+              </button>
+            </div>
           </div>
           <p class="hint" id="modeHint"></p>
         </div>
@@ -85,9 +91,11 @@
 
     <div class="mic-dock">
       <p class="mic-hint" id="speechStatus">Tap the mic to speak</p>
-      <button type="button" class="mic-big" id="micBtn" aria-label="Start speaking" aria-pressed="false">
-        <span class="mic-big-inner" aria-hidden="true"></span>
-      </button>
+      <div class="mic-wrap" id="micWrap">
+        <button type="button" class="mic-big" id="micBtn" aria-label="Start speaking" aria-pressed="false">
+          <span class="mic-big-inner" aria-hidden="true"></span>
+        </button>
+      </div>
     </div>
 
     <script src="/static/app.js" type="module"></script>

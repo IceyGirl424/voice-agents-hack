@@ -2,9 +2,10 @@
 Clause — voice-first legal document assistant (MVP).
 
 Run locally:
-  export GEMINI_API_KEY=...          # cloud mode
-  export ELEVEN_API_KEY=...          # optional ElevenLabs TTS for /api/speak (official SDK first)
-  export CACTUS_MODEL_PATH=...       # optional; private / on-device mode (Cactus + Gemma)
+  export GEMINI_API_KEY=...           # cloud mode
+  export ELEVEN_API_KEY=...           # optional ElevenLabs TTS for /api/speak (official SDK first)
+  export CACTUS_MODEL_PATH=...      # optional; private LLM (Cactus + Gemma)
+  export PARAKEET_MODEL_PATH=...      # optional; on-device STT via Cactus Parakeet (/api/transcribe)
 
   uvicorn app:app --reload --host 127.0.0.1 --port 8765
 
@@ -38,6 +39,7 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from llm import DISCLAIMER, GenerateResult, availability, generate_answer
+from parakeet_transcribe import parakeet_configured, transcribe_uploaded_bytes
 from pdf_extract import extract_pdf_text
 from rag import split_paragraphs, top_paragraphs
 
@@ -300,8 +302,42 @@ def health():
         "ok": True,
         "modes": caps,
         "elevenlabs": bool(os.environ.get("ELEVEN_API_KEY")),
+        "parakeet": parakeet_configured(),
         "disclaimer": DISCLAIMER,
     }
+
+
+@app.post("/api/transcribe")
+async def transcribe(audio: UploadFile = File(...)):
+    """
+    On-device ASR: browser sends recorded audio (e.g. WebM from MediaRecorder), Parakeet returns text.
+    Configure PARAKEET_MODEL_PATH to Parakeet weights (Cactus-converted folder).
+    """
+    if not parakeet_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="PARAKEET_MODEL_PATH is not set or the directory does not exist.",
+        )
+
+    max_bytes = int(os.environ.get("CLAUSE_MAX_TRANSCRIBE_MB", "32")) * 1024 * 1024
+    try:
+        data = await audio.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read upload: {e}") from e
+
+    if len(data) < 64:
+        raise HTTPException(status_code=400, detail="Audio empty or too short.")
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail="Audio file too large.")
+
+    filename = audio.filename or "audio.webm"
+
+    try:
+        text = await run_in_threadpool(transcribe_uploaded_bytes, data, filename)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return {"text": text, "source": "parakeet"}
 
 
 @app.post("/api/speak")
