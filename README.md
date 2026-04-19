@@ -18,8 +18,8 @@ Your lease never leaves your device in Private mode. Voice-native means you can 
 
 - **Backend:** Python + FastAPI
 - **On-device inference:** Gemma 4 (E2B) via Cactus SDK — hybrid routing
+- **On-device speech-to-text:** Parakeet TDT (Cactus `cactus_transcribe` + `POST /api/transcribe`); **Web Speech API** as fallback
 - **Cloud fallback:** Gemini 3 Flash via Google AI Studio
-- **Voice input:** Web Speech API
 - **Voice output:** ElevenLabs TTS (Rachel) via official Python SDK, with browser speech synthesis as fallback
 - **PDF parsing:** pypdf + RAG retrieval
 - **Frontend:** Vanilla JS/CSS, single page
