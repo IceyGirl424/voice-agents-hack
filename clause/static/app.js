@@ -209,36 +209,63 @@ async function playAssistantReplyAudio(text) {
 
   stopAssistantPlayback();
 
+  const fallbackWithLog = (reason) => {
+    if (typeof console !== "undefined" && console.warn) {
+      console.warn("[Clause TTS] Using browser speech (ElevenLabs unavailable):", reason);
+    }
+    speakAssistantReply(text);
+  };
+
   try {
     const res = await fetch("/api/speak", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg,audio/*;q=0.9,*/*;q=0.8",
+      },
       body: JSON.stringify({ text }),
     });
+
+    const ct = (res.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
+
     if (!res.ok) {
-      speakAssistantReply(text);
-      return;
-    }
-    const blob = await res.blob();
-    if (!blob?.size) {
-      speakAssistantReply(text);
+      fallbackWithLog(`HTTP ${res.status}`);
       return;
     }
 
-    assistantAudioObjectUrl = URL.createObjectURL(blob);
-    const audio = new Audio(assistantAudioObjectUrl);
+    if (ct.includes("application/json")) {
+      fallbackWithLog("API returned JSON instead of audio");
+      return;
+    }
+
+    const blob = await res.blob();
+    if (!blob?.size) {
+      fallbackWithLog("empty audio body");
+      return;
+    }
+
+    const mimeFromBlob = blob.type || ct || "audio/mpeg";
+    const audioBlob =
+      mimeFromBlob.includes("mpeg") || mimeFromBlob.includes("mp3") || mimeFromBlob.startsWith("audio/")
+        ? blob
+        : new Blob([blob], { type: "audio/mpeg" });
+
+    assistantAudioObjectUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio();
+    audio.src = assistantAudioObjectUrl;
+    audio.preload = "auto";
     assistantAudioEl = audio;
     audio.addEventListener("ended", () => {
       stopAssistantPlayback();
     });
     audio.addEventListener("error", () => {
-      speakAssistantReply(text);
+      fallbackWithLog("audio element error");
     });
-    await audio.play().catch(() => {
-      speakAssistantReply(text);
+    await audio.play().catch((e) => {
+      fallbackWithLog(e?.message || "play() rejected");
     });
-  } catch {
-    speakAssistantReply(text);
+  } catch (e) {
+    fallbackWithLog(e?.message || "fetch failed");
   }
 }
 

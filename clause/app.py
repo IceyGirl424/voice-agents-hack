@@ -3,7 +3,7 @@ Clause — voice-first legal document assistant (MVP).
 
 Run locally:
   export GEMINI_API_KEY=...          # cloud mode
-  export ELEVEN_API_KEY=...          # optional ElevenLabs TTS for /api/speak
+  export ELEVEN_API_KEY=...          # optional ElevenLabs TTS for /api/speak (official SDK first)
   export CACTUS_MODEL_PATH=...       # optional; private / on-device mode (Cactus + Gemma)
 
   uvicorn app:app --reload --host 127.0.0.1 --port 8765
@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 _APP_DIR = Path(__file__).resolve().parent
 load_dotenv(_APP_DIR / ".env", override=True)
 
+import json
+import logging
 import os
 import uuid
 from typing import Literal
@@ -32,6 +34,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from llm import DISCLAIMER, GenerateResult, availability, generate_answer
@@ -42,6 +45,8 @@ ROOT = _APP_DIR
 STATIC = ROOT / "static"
 
 _SESSIONS: dict[str, dict] = {}
+
+_logger = logging.getLogger("clause.tts")
 
 app = FastAPI(title="Clause", version="0.1.0")
 
@@ -64,8 +69,184 @@ class SpeakBody(BaseModel):
     text: str = Field(..., min_length=1, max_length=500_000)
 
 
-ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 DEFAULT_ELEVEN_VOICE_ID = "21m00Tcm4TlvDq8ikWAM"
+# Turbo v2.5 typically sounds more natural than multilingual_v2 for English conversational TTS.
+DEFAULT_ELEVEN_MODEL_ID = "eleven_turbo_v2_5"
+
+# Browser-like UA helps avoid shared-network / bot-detection blocks on some ElevenLabs edges.
+DEFAULT_ELEVEN_HTTP_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.4 Safari/605.1.15 Clause/1.0"
+)
+
+
+def _elevenlabs_base_urls() -> list[str]:
+    raw = os.environ.get("ELEVEN_API_BASE", "").strip()
+    bases = []
+    if raw:
+        bases.append(raw.rstrip("/"))
+    bases.extend(
+        [
+            "https://api.elevenlabs.io",
+            "https://api.us.elevenlabs.io",
+        ]
+    )
+    seen: set[str] = set()
+    out: list[str] = []
+    for b in bases:
+        if b not in seen:
+            seen.add(b)
+            out.append(b)
+    return out
+
+
+def _elevenlabs_headers(*, user_agent: str, api_key_header: str | None) -> dict[str, str]:
+    h = {
+        "User-Agent": user_agent,
+        "Accept": "audio/mpeg, audio/*;q=0.9, */*;q=0.8",
+        "Content-Type": "application/json",
+    }
+    if api_key_header:
+        h["xi-api-key"] = api_key_header.strip()
+    return h
+
+
+async def _elevenlabs_fetch_audio(
+    *,
+    api_key: str,
+    voice_id: str,
+    payload: dict,
+) -> tuple[bytes, str]:
+    """
+    Try several ElevenLabs request shapes (streaming vs non-stream, header vs query auth,
+    alternate regional hosts). Returns (mp3_bytes, attempt_label).
+    """
+    ua = os.environ.get("ELEVEN_HTTP_USER_AGENT", DEFAULT_ELEVEN_HTTP_UA).strip() or DEFAULT_ELEVEN_HTTP_UA
+    output_fmt = os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128").strip() or "mp3_44100_128"
+
+    last_status: int | None = None
+    last_snippet = ""
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        for base in _elevenlabs_base_urls():
+            for use_stream in (True, False):
+                path = f"{base}/v1/text-to-speech/{voice_id}"
+                if use_stream:
+                    path += "/stream"
+
+                params_header: dict[str, str] = {}
+                if use_stream:
+                    params_header["output_format"] = output_fmt
+
+                # (1) Streaming/non-stream + xi-api-key header + realistic User-Agent
+                label_a = f"{base} {'stream' if use_stream else 'generate'} header-auth"
+                try:
+                    r = await client.post(
+                        path,
+                        headers=_elevenlabs_headers(user_agent=ua, api_key_header=api_key),
+                        params=params_header or None,
+                        json=payload,
+                    )
+                except httpx.RequestError as e:
+                    last_snippet = str(e)[:400]
+                    continue
+
+                last_status = r.status_code
+                if r.status_code == 200 and r.content:
+                    return r.content, label_a
+
+                if r.text:
+                    last_snippet = r.text[:500]
+
+                # (2) Same URL but pass xi-api-key as query param (some networks strip headers)
+                params_query = {**params_header, "xi-api-key": api_key.strip()}
+                label_b = f"{base} {'stream' if use_stream else 'generate'} query-auth"
+                try:
+                    r2 = await client.post(
+                        path,
+                        headers=_elevenlabs_headers(user_agent=ua, api_key_header=None),
+                        params=params_query,
+                        json=payload,
+                    )
+                except httpx.RequestError as e:
+                    last_snippet = str(e)[:400]
+                    continue
+
+                last_status = r2.status_code
+                if r2.status_code == 200 and r2.content:
+                    return r2.content, label_b
+
+                if r2.text:
+                    last_snippet = r2.text[:500]
+
+    detail = last_snippet or "unknown error"
+    raise HTTPException(
+        status_code=502,
+        detail=f"ElevenLabs error after retries (last HTTP {last_status}): {detail}",
+    )
+
+
+def _elevenlabs_tts_payload(text: str) -> dict:
+    """Body for ElevenLabs text-to-speech — tuned for conversational, less robotic delivery."""
+    model_id = os.environ.get("ELEVEN_MODEL_ID", DEFAULT_ELEVEN_MODEL_ID).strip() or DEFAULT_ELEVEN_MODEL_ID
+    raw_settings = os.environ.get("ELEVEN_VOICE_SETTINGS_JSON", "").strip()
+    if raw_settings:
+        try:
+            voice_settings = json.loads(raw_settings)
+        except json.JSONDecodeError:
+            voice_settings = None
+    else:
+        voice_settings = None
+
+    if voice_settings is None:
+        # Lower stability → more expressive; speaker boost + similarity → less "flat robot".
+        voice_settings = {
+            "stability": float(os.environ.get("ELEVEN_STABILITY", "0.42")),
+            "similarity_boost": float(os.environ.get("ELEVEN_SIMILARITY", "0.85")),
+            "style": float(os.environ.get("ELEVEN_STYLE", "0.22")),
+            "use_speaker_boost": os.environ.get("ELEVEN_SPEAKER_BOOST", "true").lower()
+            in ("1", "true", "yes"),
+            "speed": float(os.environ.get("ELEVEN_SPEED", "0.94")),
+        }
+
+    return {
+        "text": text,
+        "model_id": model_id,
+        "voice_settings": voice_settings,
+    }
+
+
+def _elevenlabs_sdk_convert_bytes(
+    api_key: str,
+    voice_id: str,
+    payload: dict,
+    output_format: str,
+) -> bytes:
+    """
+    Official `elevenlabs` Python SDK — equivalent to JS:
+      `elevenlabs.textToSpeech.convert(voiceId, { text, modelId, outputFormat, ... })`
+    Uses ELEVEN_API_KEY from env (passed in); never expose key to the browser.
+    """
+    from elevenlabs import ElevenLabs, VoiceSettings
+
+    vs_raw = payload.get("voice_settings") or {}
+    voice_settings = VoiceSettings(
+        stability=float(vs_raw["stability"]),
+        similarity_boost=float(vs_raw["similarity_boost"]),
+        style=float(vs_raw["style"]),
+        use_speaker_boost=bool(vs_raw["use_speaker_boost"]),
+        speed=float(vs_raw["speed"]),
+    )
+
+    client = ElevenLabs(api_key=api_key.strip())
+    chunks = client.text_to_speech.convert(
+        voice_id=voice_id,
+        text=payload["text"],
+        model_id=payload["model_id"],
+        output_format=output_format,  # type: ignore[arg-type]
+        voice_settings=voice_settings,
+    )
+    return b"".join(chunks)
 
 
 def _system_prompt() -> str:
@@ -134,39 +315,29 @@ async def speak(body: SpeakBody):
         )
 
     voice_id = os.environ.get("ELEVEN_VOICE_ID", DEFAULT_ELEVEN_VOICE_ID)
-    model_id = os.environ.get("ELEVEN_MODEL_ID", "eleven_multilingual_v2")
-    url = f"{ELEVENLABS_TTS_URL}/{voice_id}"
 
-    payload = {
-        "text": body.text,
-        "model_id": model_id,
-    }
+    payload = _elevenlabs_tts_payload(body.text)
+    output_fmt = os.environ.get("ELEVEN_OUTPUT_FORMAT", "mp3_44100_128").strip() or "mp3_44100_128"
 
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                url,
-                headers={
-                    "xi-api-key": api_key.strip(),
-                    "Accept": "audio/mpeg",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
+    use_sdk = os.environ.get("ELEVEN_USE_OFFICIAL_SDK", "true").lower() in ("1", "true", "yes")
+    if use_sdk:
+        try:
+            audio = await run_in_threadpool(
+                _elevenlabs_sdk_convert_bytes,
+                api_key,
+                voice_id,
+                payload,
+                output_fmt,
             )
-    except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"ElevenLabs request failed: {e}",
-        ) from e
+            return Response(content=audio, media_type="audio/mpeg")
+        except Exception as exc:
+            _logger.warning(
+                "ElevenLabs Python SDK convert failed (%s); falling back to REST retries.",
+                exc,
+            )
 
-    if resp.status_code != 200:
-        detail = resp.text[:800] if resp.text else resp.reason_phrase
-        raise HTTPException(
-            status_code=502,
-            detail=f"ElevenLabs error ({resp.status_code}): {detail}",
-        )
-
-    return Response(content=resp.content, media_type="audio/mpeg")
+    audio, _attempt = await _elevenlabs_fetch_audio(api_key=api_key, voice_id=voice_id, payload=payload)
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 @app.post("/api/upload")
