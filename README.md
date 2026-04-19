@@ -1,44 +1,101 @@
-<img src="assets/banner.png" alt="Logo" style="border-radius: 30px; width: 60%;">
+# Clause — Your lease, in plain English
 
-## Context
-- Cactus (YC S25) is a low-latency engine for mobile devices & wearables. 
-- Cactus runs locally on edge devices with hybrid routing of complex tasks to cloud models like Gemini.
-- Google DeepMind just released Gemma 4, the first on-device model you can voice-prompt. 
-- Gemma 4 on Cactus is multimodal, supporting voice, vision, function calling, transcription and more! 
+The first document that has real power over your life is your lease — and 44 million Americans sign one every year without understanding it. Clause changes that, privately, by voice, on your device.
 
-## Challenge
-- All teams MUST build products that use Gemma 4 on Cactus. 
-- All products MUST leverage voice functionality in some way. 
-- All submissions MUST be working MVPs capable of venture backing. 
-- Winner takes all: Guaranteed YC Interview + GCP Credits. 
+## The Problem
 
-## Special Tracks 
-- Best On-Device Enterprise Agent (B2B): Highest commercial viability for offline tools.
-- Ultimate Consumer Voice Experience (B2C): Best use of low-latency compute to create ultra-natural, instantaneous voice interaction.
-- Deepest Technical Integration: Pushing the boundaries of the hardware/software stack (e.g., novel routing, multi-agent on-device setups, extreme power optimization).
+44 million US renter households sign leases they don't understand. When something goes wrong — unauthorized pets, noise violations, sketchy new clauses, unauthorized guests — they have no idea what their rights are. They'd never upload their lease to a random cloud app for privacy reasons. And they're too stressed to read through dense legal text.
 
-Prizes per special track: 
-- 1st Place: $2,000 in GCP credits
-- 2nd Place: $1,000 in GCP credits 
-- 3rd Place: $500 in GCP credits 
+## The Solution
 
-## Judging 
-- **Rubric 1**: The relevnance and realness of the problem and appeal to enterprises and VCs. 
-- **Rubric 2**: Correcness & quality of the MVP and demo. 
+Upload your lease, tap the mic, ask in plain English. Get grounded answers from your actual clauses, spoken back to you by voice. Toggle between **Private** (on-device Gemma 4 via Cactus — nothing leaves your device) and **Cloud** (Gemini — higher accuracy) based on your privacy needs.
 
-## Setup (clone this repo and hollistically follow)
-- Step 1: Fork this repo, clone to your Mac, open terminal.
-- Step 2: `git clone https://github.com/cactus-compute/cactus`
-- Step 3: `cd cactus && source ./setup && cd ..` (re-run in new terminal)
-- Step 4: `cactus build --python`
-- Step 5: `cactus download google/functiongemma-270m-it --reconvert`
-- Step 6: Get cactus key from the [cactus website](https://cactuscompute.com/dashboard/api-keys)
-- Sept 7: Run `cactus auth` and enter your token when prompted.
-- Step 8: `pip install google-genai` (if using cloud fallback) 
-- Step 9: Obtain Gemini API key from [Google AI Studio](https://aistudio.google.com/api-keys) (if using cloud fallback) 
-- Step 10: `export GEMINI_API_KEY="your-key"` (if using cloud fallback) 
+## Why Not ChatGPT?
 
-## Next steps
-1. Read Cactus docs carefully: [Link](https://docs.cactuscompute.com/latest/)
-2. Read Gemma 4 on Cactus walkthrough carefully: [Link](https://docs.cactuscompute.com/latest/blog/gemma4/)
-3. Cactus & DeepMind team would be available on-site. 
+Your lease never leaves your device in Private mode. Voice-native means you can use it while stressed, walking to your car, standing outside your landlord's office. It knows **your** document, not generic legal info.
+
+## Tech Stack
+
+- **Backend:** Python + FastAPI
+- **On-device inference:** Gemma 4 (E2B) via Cactus SDK — hybrid routing
+- **Cloud fallback:** Gemini 3 Flash via Google AI Studio
+- **Voice input:** Web Speech API
+- **Voice output:** ElevenLabs TTS (Rachel) via official Python SDK, with browser speech synthesis as fallback
+- **PDF parsing:** pypdf + RAG retrieval
+- **Frontend:** Vanilla JS/CSS, single page
+
+## Demo Scenario
+
+*My roommate brought a cat into our 4-person apartment 2 months ago against the pet policy. Am I liable? What can my landlord do? How do I handle this conversation?* — answered in seconds from the actual lease clauses, spoken back by voice.
+
+## Market
+
+- 44M renter households in the US
+- **Expansion:** employment contracts, NDAs, insurance policies, medical consent forms
+- **B2B:** property managers, law firms (data can't leave device due to liability)
+
+## Built by
+
+**Lena Munad** — Solo technical founder of Moneyhubb (AI financial assistant, live on Apple store), B.S. Data Science at San Jose State University. Built Clause in two days at the YC x Google DeepMind x Cactus Gemma 4 Voice Agents Hackathon.
+
+## How to Run
+
+**Prerequisites:** macOS (recommended for Cactus + on-device), Python 3.10+.
+
+### 1. Set up Cactus and Gemma 4 weights
+
+```bash
+git clone https://github.com/cactus-compute/cactus
+cd cactus && source ./setup && cd ..
+cactus build --python
+cactus download google/gemma-4-E2B-it --reconvert
+cactus auth
+```
+
+`cactus auth` will prompt for your Cactus API key from the [Cactus dashboard](https://cactuscompute.com/dashboard/api-keys).
+
+### 2. Clone this repo and install Clause
+
+```bash
+git clone https://github.com/IceyGirl424/voice-agents-hack
+cd voice-agents-hack/clause
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 3. Create a `.env` file in the `clause` folder
+
+Copy the variables below and fill in your keys. Paths to Cactus should match your local clone (the `weights` directory is created under the Cactus repo when you run `cactus download`).
+
+```env
+GEMINI_API_KEY=your-gemini-key
+GEMINI_MODEL=gemini-3-flash-preview
+
+# On-device (Private mode) — point at your converted weights folder
+CACTUS_MODEL_PATH=/path/to/cactus/weights/gemma-4-e2b-it
+CACTUS_PYTHON_SRC=/path/to/cactus/python/src
+
+# Optional: natural TTS for spoken answers (falls back to browser TTS if unset)
+ELEVEN_API_KEY=your-elevenlabs-key
+```
+
+- **Gemini key:** [Google AI Studio](https://aistudio.google.com/api-keys)  
+- **Cactus:** `CACTUS_MODEL_PATH` is the directory containing `config.txt` and `*.weights` shards (not a single `.gguf` file).  
+- **ElevenLabs:** used by `POST /api/speak` for high-quality voice; optional.
+
+### 4. Start the server
+
+```bash
+cd voice-agents-hack/clause
+source .venv/bin/activate
+uvicorn app:app --reload --host 127.0.0.1 --port 8768
+```
+
+### 5. Open the app
+
+[http://127.0.0.1:8768](http://127.0.0.1:8768) — upload a lease PDF, choose **Private** or **Cloud**, tap the mic, and ask your question.
+
+---
+
+*This repository’s hackathon template context and Cactus setup notes live in `assets/` and history; the **Clause** app code is in the `clause/` directory.*
