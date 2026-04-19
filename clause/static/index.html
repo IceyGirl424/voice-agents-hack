@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Clause — understand your lease, privately</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <div class="brand-text">
+          <span class="name">Clause</span>
+          <span class="tag">Your lease, in plain English</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button type="button" class="btn ghost" id="themeToggle" aria-label="Toggle color theme">Theme</button>
+      </div>
+    </header>
+
+    <main class="shell shell--chat">
+      <p class="intro-blurb">
+        Upload your document, then talk it through — follow-ups remember what you asked. Voice only.
+      </p>
+
+      <section class="layout layout--setup">
+        <div class="panel card panel--compact">
+          <div class="panel-head">
+            <h2>Document</h2>
+            <span class="pill" id="docStatus">No file yet</span>
+          </div>
+          <label class="dropzone dropzone--compact" id="dropzone">
+            <input type="file" id="fileInput" accept="application/pdf" hidden />
+            <div class="drop-inner">
+              <strong>Drop PDF</strong>
+              <span>or tap to browse</span>
+            </div>
+          </label>
+          <div class="meta" id="docMeta" hidden></div>
+        </div>
+
+        <div class="panel card panel--compact">
+          <div class="panel-head">
+            <h2>Mode</h2>
+          </div>
+          <div class="mode-row" role="group" aria-label="Inference mode">
+            <button type="button" class="mode-btn active" data-mode="private" id="modePrivate">
+              <span class="mode-title">Private</span>
+              <span class="mode-sub">On-device</span>
+            </button>
+            <button type="button" class="mode-btn" data-mode="cloud" id="modeCloud">
+              <span class="mode-title">Cloud</span>
+              <span class="mode-sub">Gemini</span>
+            </button>
+          </div>
+          <p class="hint" id="modeHint"></p>
+        </div>
+      </section>
+
+      <section class="chat-panel card" aria-label="Conversation">
+        <div class="chat-scroll" id="chatScroll">
+          <div class="chat-thread" id="chatThread" role="log" aria-live="polite" aria-relevant="additions"></div>
+          <div class="chat-empty" id="chatEmpty">
+            <p class="chat-empty-title">Hi — I’m Clause.</p>
+            <p class="chat-empty-text">
+              Once your lease is uploaded, tap the mic below and ask anything. I’ll pull the right clauses and walk
+              through it with you — like talking to a friend who actually read the fine print.
+            </p>
+          </div>
+        </div>
+        <p class="fineprint chat-disclaimer">
+          Grounded in your PDF’s text; not legal advice. Follow-ups stay in this chat until you upload a new file.
+        </p>
+      </section>
+    </main>
+
+    <div class="mic-dock">
+      <p class="mic-hint" id="speechStatus">Tap the mic to speak</p>
+      <button type="button" class="mic-big" id="micBtn" aria-label="Start speaking" aria-pressed="false">
+        <span class="mic-big-inner" aria-hidden="true"></span>
+      </button>
+    </div>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
